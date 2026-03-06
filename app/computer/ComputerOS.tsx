@@ -90,14 +90,33 @@ export default function ComputerOS({ sessionId, steamId, playerName, interactive
       setShared(merged);
       sharedRef.current = merged;
       setIsController(merged.controller.steamId === steamId);
+
+      // Dès qu'on reçoit l'état du serveur, skip le boot
+      setBooting(false);
     };
 
     window._eraDataLoaded = (key: string, data: string) => {
-      // Données personnalisées chargées depuis le serveur
       console.log('[EraOS] Data loaded:', key, data);
     };
 
+    // Signaler au serveur GMod qu'on est prêt à recevoir l'état
+    const requestState = () => {
+      try {
+        if (window.gmod?.sendAction) {
+          window.gmod.sendAction(JSON.stringify({ type: 'request_state' }));
+        }
+      } catch (e) { /* silencieux */ }
+    };
+    // Essayer immédiatement puis avec des délais (le bridge gmod peut ne pas être prêt)
+    requestState();
+    const t1 = setTimeout(requestState, 500);
+    const t2 = setTimeout(requestState, 1500);
+    const t3 = setTimeout(requestState, 3000);
+
     return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+      clearTimeout(t3);
       delete window._eraReceiveState;
       delete window._eraDataLoaded;
     };
