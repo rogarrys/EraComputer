@@ -8,6 +8,10 @@ import { NextRequest, NextResponse } from 'next/server';
 
 const PROXY_PATH = '/api/proxy?url=';
 
+function getProxyBase(appOrigin: string) {
+  return `${appOrigin}${PROXY_PATH}`;
+}
+
 // Headers CORS permissifs pour toutes les réponses du proxy
 const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
@@ -43,6 +47,8 @@ export async function GET(req: NextRequest) {
 // =============================================
 async function handleProxy(req: NextRequest, method: string) {
   const url = req.nextUrl.searchParams.get('url');
+  const appOrigin = req.nextUrl.origin;
+  const proxyBase = getProxyBase(appOrigin);
 
   if (!url) {
     return new NextResponse(
@@ -79,7 +85,7 @@ async function handleProxy(req: NextRequest, method: string) {
     // ---- HTML : réécrire + injecter ----
     if (ct.includes('text/html')) {
       let html = await res.text();
-      html = rewriteHtml(html, finalUrl);
+      html = rewriteHtml(html, finalUrl, appOrigin);
       return new NextResponse(html, {
         status: 200,
         headers: { 'Content-Type': 'text/html; charset=utf-8', ...CORS_HEADERS },
@@ -119,7 +125,7 @@ async function handleProxy(req: NextRequest, method: string) {
         <h2>Impossible de charger la page</h2>
         <p style="color:#888">${e.message || 'Erreur inconnue'}</p>
         <p style="color:#555;font-size:0.8rem;word-break:break-all">${url}</p>
-        <br><a href="${PROXY_PATH}${encodeURIComponent('https://www.google.com')}" style="color:#00c8ff">Retour à Google</a>
+        <br><a href="${proxyBase}${encodeURIComponent('https://www.google.com')}" style="color:#00c8ff">Retour à Google</a>
       </body></html>`,
       { status: 502, headers: { 'Content-Type': 'text/html; charset=utf-8', ...CORS_HEADERS } },
     );
@@ -130,16 +136,17 @@ async function handleProxy(req: NextRequest, method: string) {
 // HTML Rewriter
 // =============================================
 
-function proxyHref(href: string, baseUrl: string): string {
+function proxyHref(href: string, baseUrl: string, appOrigin: string): string {
   if (!href) return href;
   if (/^(data:|blob:|javascript:|#|mailto:|tel:)/i.test(href.trim())) return href;
   try {
-    return PROXY_PATH + encodeURIComponent(new URL(href, baseUrl).href);
+    return getProxyBase(appOrigin) + encodeURIComponent(new URL(href, baseUrl).href);
   } catch { return href; }
 }
 
-function rewriteHtml(html: string, finalUrl: string): string {
+function rewriteHtml(html: string, finalUrl: string, appOrigin: string): string {
   const origin = new URL(finalUrl).origin;
+  const proxyBase = getProxyBase(appOrigin);
 
   // Supprimer CSP meta tags
   html = html.replace(/<meta[^>]*http-equiv\s*=\s*["']?content-security-policy["']?[^>]*>/gi, '');
@@ -149,16 +156,16 @@ function rewriteHtml(html: string, finalUrl: string): string {
   // Réécrire href sur <a>
   html = html.replace(/(<a\s[^>]*?)(href\s*=\s*)(["'])(.*?)\3/gi, (_m, pre, attr, q, val) => {
     if (/^(#|javascript:|mailto:|tel:)/i.test(val.trim())) return _m;
-    return `${pre}${attr}${q}${proxyHref(val, finalUrl)}${q}`;
+    return `${pre}${attr}${q}${proxyHref(val, finalUrl, appOrigin)}${q}`;
   });
   // Réécrire action sur <form>
   html = html.replace(/(<form\s[^>]*?)(action\s*=\s*)(["'])(.*?)\3/gi, (_m, pre, attr, q, val) => {
-    return `${pre}${attr}${q}${proxyHref(val, finalUrl)}${q}`;
+    return `${pre}${attr}${q}${proxyHref(val, finalUrl, appOrigin)}${q}`;
   });
   // Réécrire src sur <iframe>
   html = html.replace(/(<iframe\s[^>]*?)(src\s*=\s*)(["'])(.*?)\3/gi, (_m, pre, attr, q, val) => {
     if (/^(about:|data:)/i.test(val.trim())) return _m;
-    return `${pre}${attr}${q}${proxyHref(val, finalUrl)}${q}`;
+    return `${pre}${attr}${q}${proxyHref(val, finalUrl, appOrigin)}${q}`;
   });
 
   // =============================================
@@ -168,12 +175,12 @@ function rewriteHtml(html: string, finalUrl: string): string {
 <base href="${origin}/">
 <script>
 (function(){
-  var P='/api/proxy?url=';
+  var P='${proxyBase}';
   var ORIGIN='${origin}';
   function isExt(u){
     if(!u||typeof u!=='string')return false;
     if(u.indexOf(P)===0)return false;
-    if(u.indexOf('/api/proxy')===0)return false;
+    if(u.indexOf('${PROXY_PATH}')===0)return false;
     return /^https?:\\/\\//i.test(u);
   }
   function wrap(u,base){
@@ -181,7 +188,7 @@ function rewriteHtml(html: string, finalUrl: string): string {
     if(typeof u!=='string')return u;
     var s=u.trim();
     if(!s||s.charAt(0)==='#'||s.indexOf('javascript:')===0||s.indexOf('data:')===0||s.indexOf('blob:')===0||s.indexOf('mailto:')===0)return u;
-    if(s.indexOf(P)===0||s.indexOf('/api/proxy')===0)return u;
+    if(s.indexOf(P)===0||s.indexOf('${PROXY_PATH}')===0)return u;
     try{var abs=new URL(s,base||ORIGIN).href;return P+encodeURIComponent(abs)}catch(e){return u}
   }
 
@@ -226,7 +233,7 @@ function rewriteHtml(html: string, finalUrl: string): string {
     if(!a||!a.href)return;
     var h=a.getAttribute('href')||'';
     if(!h||h.charAt(0)==='#'||h.indexOf('javascript:')===0||h.indexOf('mailto:')===0)return;
-    if(h.indexOf('/api/proxy')===0||h.indexOf(P)===0)return;
+    if(h.indexOf('${PROXY_PATH}')===0||h.indexOf(P)===0)return;
     e.preventDefault();e.stopPropagation();
     try{window.location.href=wrap(h,document.baseURI)}catch(ex){}
   },true);
@@ -235,7 +242,7 @@ function rewriteHtml(html: string, finalUrl: string): string {
   document.addEventListener('submit',function(e){
     var f=e.target;
     var act=f.getAttribute('action')||'';
-    if(act.indexOf('/api/proxy')===0)return;
+    if(act.indexOf('${PROXY_PATH}')===0||act.indexOf(P)===0)return;
     e.preventDefault();
     try{
       var base=new URL(act||window.location.href,document.baseURI).href;
