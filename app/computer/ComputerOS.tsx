@@ -475,6 +475,18 @@ function BrowserApp({ shared, canControl, onUpdate, onBack }: {
     }
   }, [shared.browser?.url]);
 
+  // Écouter les postMessage du proxy pour mettre à jour la barre d'URL
+  useEffect(() => {
+    const handler = (e: MessageEvent) => {
+      if (e.data?.type === 'era-proxy-nav' && e.data.url) {
+        setDisplayUrl(e.data.url);
+        setInputUrl(e.data.url);
+      }
+    };
+    window.addEventListener('message', handler);
+    return () => window.removeEventListener('message', handler);
+  }, []);
+
   const navigate = (targetUrl?: string) => {
     if (!canControl) return;
     let url = (targetUrl || inputUrl).trim();
