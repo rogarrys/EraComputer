@@ -1,8 +1,10 @@
 'use client';
 
+import dynamic from 'next/dynamic';
 import { useSearchParams } from 'next/navigation';
 import { Suspense } from 'react';
-import ComputerOS from './ComputerOS';
+
+const ComputerOS = dynamic(() => import('./ComputerOS'), { ssr: false });
 
 function ComputerContent() {
   const params = useSearchParams();
