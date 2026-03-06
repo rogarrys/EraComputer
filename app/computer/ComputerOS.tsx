@@ -466,11 +466,11 @@ function BrowserApp({ shared, canControl, onUpdate, onBack }: {
 }) {
   const [inputUrl, setInputUrl] = useState(shared.browser?.url || '');
   const [displayUrl, setDisplayUrl] = useState(shared.browser?.url || '');
-  const iframeRef = useRef<HTMLIFrameElement>(null);
 
   // Sync l'URL depuis le state partagé
   useEffect(() => {
     if (shared.browser?.url) {
+      setInputUrl(shared.browser.url);
       setDisplayUrl(shared.browser.url);
     }
   }, [shared.browser?.url]);
@@ -498,8 +498,8 @@ function BrowserApp({ shared, canControl, onUpdate, onBack }: {
       if (url.includes('.')) {
         url = 'https://' + url;
       } else {
-        // Sinon c'est une recherche Google
-        url = 'https://www.google.com/search?q=' + encodeURIComponent(url);
+        // Sinon c'est une recherche web compatible
+        url = 'https://html.duckduckgo.com/html/?q=' + encodeURIComponent(url);
       }
     }
 
@@ -508,18 +508,18 @@ function BrowserApp({ shared, canControl, onUpdate, onBack }: {
     onUpdate({ browser: { url } });
   };
 
-  const getProxyUrl = (url: string) => {
+  const getLiteUrl = (url: string) => {
     if (!url) return '';
-    return '/api/proxy?url=' + encodeURIComponent(url);
+    return '/api/web-lite?url=' + encodeURIComponent(url);
   };
 
   const bookmarks = [
-    { title: 'Google', url: 'https://www.google.com' },
+    { title: 'Recherche', url: 'https://html.duckduckgo.com/html/' },
     { title: 'Wikipedia', url: 'https://fr.wikipedia.org' },
-    { title: 'Reddit', url: 'https://old.reddit.com' },
+    { title: 'Old Reddit', url: 'https://old.reddit.com' },
     { title: 'GitHub', url: 'https://github.com' },
-    { title: 'YouTube', url: 'https://m.youtube.com' },
-    { title: 'Twitter/X', url: 'https://nitter.net' },
+    { title: 'MDN', url: 'https://developer.mozilla.org' },
+    { title: 'StackOverflow', url: 'https://stackoverflow.com' },
   ];
 
   return (
@@ -567,19 +567,18 @@ function BrowserApp({ shared, canControl, onUpdate, onBack }: {
       <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
         {displayUrl ? (
           <iframe
-            ref={iframeRef}
             key={displayUrl}
-            src={getProxyUrl(displayUrl)}
+            src={getLiteUrl(displayUrl)}
             style={{ width: '100%', height: '100%', border: 'none', background: '#fff' }}
-            sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+            sandbox="allow-scripts allow-same-origin"
             title="Browser"
           />
         ) : (
           <div style={{ padding: '40px', textAlign: 'center' }}>
             <div style={{ fontSize: '1.5rem', color: '#00c8ff', fontWeight: 'bold', marginBottom: '8px' }}>WWW</div>
-            <div style={{ fontSize: '1.2rem', color: '#ddd', marginBottom: '24px' }}>Navigateur Era</div>
+            <div style={{ fontSize: '1.2rem', color: '#ddd', marginBottom: '24px' }}>Navigateur Era Lite</div>
             <p style={{ color: '#666', fontSize: '0.85rem', marginBottom: '30px' }}>
-              Entrez une URL ou un terme de recherche dans la barre ci-dessus
+              Version compatible GMod : articles, documentation, forums et pages statiques
             </p>
 
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', justifyContent: 'center', maxWidth: '500px', margin: '0 auto' }}>
@@ -610,7 +609,7 @@ function BrowserApp({ shared, canControl, onUpdate, onBack }: {
         color: '#444', display: 'flex', justifyContent: 'space-between',
       }}>
         <span>{displayUrl ? displayUrl : 'Pret'}</span>
-        <span>Via proxy Vercel</span>
+        <span>Mode Web Lite</span>
       </div>
     </div>
   );
