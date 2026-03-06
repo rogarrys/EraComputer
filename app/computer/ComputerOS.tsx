@@ -514,7 +514,7 @@ function YouTubeApp({ shared, canControl, onUpdate, onBack, addNotification }: {
             key={`${yt.videoId}_${yt.startedAt}`}
             src={getEmbedUrl()}
             style={{ width: '100%', height: '100%', border: 'none' }}
-            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
             allowFullScreen
             title="YouTube"
           />
