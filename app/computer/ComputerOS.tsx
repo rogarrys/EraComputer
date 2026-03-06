@@ -10,13 +10,14 @@ interface Props {
 }
 
 // L'état partagé — TOUT le monde voit exactement la même chose
+// C'est le serveur GMod qui est la source de vérité
 interface SharedState {
-  activeApp: string; // quelle app est ouverte
+  activeApp: string;
   youtube: {
     videoId: string;
     playing: boolean;
-    startedAt: number; // timestamp serveur quand la vidéo a commencé
-    seekTime: number;  // position en secondes
+    startedAt: number;
+    seekTime: number;
   };
   notepad: string;
   radio: {
@@ -31,25 +32,21 @@ interface SharedState {
     steamId: string;
     name: string;
   };
+  viewers: { steamId: string; name: string }[];
 }
 
-interface Viewer {
-  steamId: string;
-  name: string;
-}
-
-// Bridge GMod
+// Bridge GMod — Le DHTML expose ces fonctions
 declare global {
   interface Window {
     gmod?: {
-      navigate?: (url: string) => void;
+      sendAction?: (json: string) => void;
       powerOff?: () => void;
       saveData?: (key: string, value: string) => void;
       loadData?: (key: string) => void;
       closeScreen?: () => void;
     };
-    onSyncUpdate?: (url: string, playerName: string) => void;
-    onDataLoaded?: (key: string, data: string) => void;
+    _eraReceiveState?: (state: SharedState) => void;
+    _eraDataLoaded?: (key: string, data: string) => void;
   }
 }
 
@@ -60,22 +57,77 @@ const DEFAULT_STATE: SharedState = {
   radio: { stationUrl: '', stationName: '', playing: false },
   gallery: { imageUrl: '' },
   controller: { steamId: '', name: '' },
+  viewers: [],
 };
 
 export default function ComputerOS({ sessionId, steamId, playerName, interactive }: Props) {
   const [booting, setBooting] = useState(true);
   const [bootProgress, setBootProgress] = useState(0);
   const [shared, setShared] = useState<SharedState>(DEFAULT_STATE);
-  const [viewers, setViewers] = useState<Viewer[]>([]);
   const [currentTime, setCurrentTime] = useState('');
   const [notifications, setNotifications] = useState<string[]>([]);
-  const [lastSyncTimestamp, setLastSyncTimestamp] = useState(0);
   const [isController, setIsController] = useState(false);
   const sharedRef = useRef(shared);
-  const syncLock = useRef(false);
 
-  // Garder la ref à jour
   useEffect(() => { sharedRef.current = shared; }, [shared]);
+
+  // =====================
+  // BRIDGE: recevoir l'état depuis le serveur GMod (via RunJavascript)
+  // =====================
+  useEffect(() => {
+    window._eraReceiveState = (state: SharedState) => {
+      if (!state) return;
+      // Fusionner avec les valeurs par défaut pour les champs manquants
+      const merged: SharedState = {
+        ...DEFAULT_STATE,
+        ...state,
+        youtube: { ...DEFAULT_STATE.youtube, ...(state.youtube || {}) },
+        radio: { ...DEFAULT_STATE.radio, ...(state.radio || {}) },
+        gallery: { ...DEFAULT_STATE.gallery, ...(state.gallery || {}) },
+        controller: { ...DEFAULT_STATE.controller, ...(state.controller || {}) },
+        viewers: state.viewers || [],
+      };
+      setShared(merged);
+      sharedRef.current = merged;
+      setIsController(merged.controller.steamId === steamId);
+    };
+
+    window._eraDataLoaded = (key: string, data: string) => {
+      // Données personnalisées chargées depuis le serveur
+      console.log('[EraOS] Data loaded:', key, data);
+    };
+
+    return () => {
+      delete window._eraReceiveState;
+      delete window._eraDataLoaded;
+    };
+  }, [steamId]);
+
+  // =====================
+  // BRIDGE: envoyer une action au serveur GMod (via gmod.sendAction)
+  // =====================
+  const sendAction = useCallback((action: object) => {
+    try {
+      if (window.gmod?.sendAction) {
+        window.gmod.sendAction(JSON.stringify(action));
+      }
+    } catch (e) {
+      console.error('[EraOS] sendAction error:', e);
+    }
+  }, []);
+
+  // =====================
+  // Pousser un changement d'état → serveur GMod
+  // =====================
+  const pushState = useCallback((newState: Partial<SharedState>) => {
+    // Mise à jour optimiste locale immédiate
+    const merged = { ...sharedRef.current, ...newState };
+    setShared(merged);
+    sharedRef.current = merged;
+
+    // Envoyer au serveur GMod qui va broadcaster à tout le monde
+    sendAction({ type: 'update_state', data: newState });
+  }, [sendAction]);
 
   // =====================
   // BOOT ANIMATION
@@ -108,88 +160,20 @@ export default function ComputerOS({ sessionId, steamId, playerName, interactive
   }, []);
 
   // =====================
-  // SYNC: envoyer l'état partagé au serveur
-  // =====================
-  const pushState = useCallback(async (newState: Partial<SharedState>) => {
-    const merged = { ...sharedRef.current, ...newState };
-    setShared(merged);
-    sharedRef.current = merged;
-
-    try {
-      await fetch('/api/session/state', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId,
-          key: 'shared',
-          value: merged,
-        }),
-      });
-    } catch (e) { /* silencieux */ }
-  }, [sessionId]);
-
-  // =====================
-  // SYNC: polling — récupérer l'état depuis le serveur
-  // =====================
-  useEffect(() => {
-    if (booting) return;
-
-    const poll = async () => {
-      if (syncLock.current) return;
-      try {
-        const res = await fetch(
-          `/api/session/poll?sessionId=${sessionId}&since=${lastSyncTimestamp}&steamId=${steamId}&name=${encodeURIComponent(playerName)}`
-        );
-        const data = await res.json();
-        if (!data.success) return;
-
-        setViewers(data.session.viewers || []);
-        setLastSyncTimestamp(data.timestamp);
-
-        // Récupérer l'état partagé
-        if (data.session.state?.shared) {
-          const remote: SharedState = data.session.state.shared;
-          // On prend toujours l'état du serveur (= partage d'écran)
-          setShared(remote);
-          sharedRef.current = remote;
-
-          // Vérifier si on est le controller
-          setIsController(remote.controller?.steamId === steamId);
-        }
-
-        // Traiter les événements pour notifications
-        if (data.events?.length > 0) {
-          for (const ev of data.events) {
-            if (ev.type === 'state_update' && ev.data?.value?.controller) {
-              // Notification de changement
-            }
-          }
-        }
-      } catch (e) { /* silencieux */ }
-    };
-
-    // Premier poll immédiat
-    poll();
-    // Puis toutes les secondes
-    const interval = setInterval(poll, 1000);
-    return () => clearInterval(interval);
-  }, [booting, sessionId, steamId, playerName, lastSyncTimestamp]);
-
-  // =====================
   // Prendre le contrôle
   // =====================
   const takeControl = useCallback(() => {
-    pushState({ controller: { steamId, name: playerName } });
+    sendAction({ type: 'take_control' });
     setIsController(true);
-    addNotification('Vous avez pris le contrôle');
-  }, [steamId, playerName, pushState]);
+    addNotification('Vous avez pris le controle');
+  }, [sendAction]);
 
   // =====================
   // Ouvrir une app
   // =====================
   const openApp = useCallback((appId: string) => {
     if (!isController && shared.controller.steamId !== '') {
-      addNotification(`${shared.controller.name} contrôle l'ordinateur`);
+      addNotification(`${shared.controller.name} controle l'ordinateur`);
       return;
     }
     if (!isController) takeControl();
@@ -213,7 +197,7 @@ export default function ComputerOS({ sessionId, steamId, playerName, interactive
         width: '100vw', height: '100vh', background: '#080818',
         display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
       }}>
-        <div style={{ fontSize: '2.5rem', marginBottom: '2rem', color: '#00c8ff' }}>🖥️ EraOS</div>
+        <div style={{ fontSize: '2.5rem', marginBottom: '2rem', color: '#00c8ff' }}>EraOS</div>
         <div style={{ width: '300px', height: '4px', background: '#222', borderRadius: '2px', overflow: 'hidden' }}>
           <div style={{
             width: `${Math.min(bootProgress, 100)}%`, height: '100%',
@@ -221,7 +205,7 @@ export default function ComputerOS({ sessionId, steamId, playerName, interactive
             transition: 'width 0.15s',
           }} />
         </div>
-        <div style={{ marginTop: '1rem', color: '#444', fontSize: '0.8rem' }}>Démarrage...</div>
+        <div style={{ marginTop: '1rem', color: '#444', fontSize: '0.8rem' }}>Demarrage...</div>
       </div>
     );
   }
@@ -230,21 +214,22 @@ export default function ComputerOS({ sessionId, steamId, playerName, interactive
   // DESKTOP
   // =====================
   const apps = [
-    { id: 'youtube', title: 'YouTube', icon: '▶️' },
-    { id: 'radio', title: 'Radio/Musique', icon: '🎵' },
-    { id: 'notepad', title: 'Bloc-notes', icon: '📝' },
-    { id: 'gallery', title: 'Galerie', icon: '🖼️' },
-    { id: 'viewers', title: 'Connectés', icon: '👥' },
-    { id: 'settings', title: 'Paramètres', icon: '⚙️' },
+    { id: 'youtube', title: 'YouTube', icon: 'YT' },
+    { id: 'radio', title: 'Radio', icon: 'FM' },
+    { id: 'notepad', title: 'Bloc-notes', icon: 'TXT' },
+    { id: 'gallery', title: 'Galerie', icon: 'IMG' },
+    { id: 'viewers', title: 'Connectes', icon: 'NET' },
+    { id: 'settings', title: 'Parametres', icon: 'CFG' },
   ];
 
+  const viewers = shared.viewers || [];
   const canControl = isController || shared.controller.steamId === '' || shared.controller.steamId === steamId;
 
   return (
     <div style={{
       width: '100vw', height: '100vh',
       background: 'linear-gradient(135deg, #0a1628, #162a50, #0d1f3c)',
-      position: 'relative', overflow: 'hidden',
+      position: 'relative', overflow: 'hidden', fontFamily: 'Arial, sans-serif',
     }}>
       {/* === CONTENU PRINCIPAL === */}
       <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: '48px', overflow: 'hidden' }}>
@@ -312,7 +297,7 @@ export default function ComputerOS({ sessionId, steamId, playerName, interactive
         ))}
       </div>
 
-      {/* === BARRE DE CONTRÔLE (qui contrôle) === */}
+      {/* === BARRE DE CONTROLE === */}
       {shared.controller.steamId !== '' && !isController && (
         <div style={{
           position: 'absolute', top: '10px', left: '50%', transform: 'translateX(-50%)',
@@ -320,12 +305,12 @@ export default function ComputerOS({ sessionId, steamId, playerName, interactive
           fontSize: '0.8rem', color: '#ffaa00', zIndex: 10000,
           border: '1px solid rgba(255,170,0,0.3)',
         }}>
-          🎮 {shared.controller.name} contrôle l'ordinateur
+          {shared.controller.name} controle l'ordinateur
           <span
             onClick={takeControl}
             style={{ marginLeft: '10px', color: '#00c8ff', cursor: 'pointer', textDecoration: 'underline' }}
           >
-            Prendre le contrôle
+            Prendre le controle
           </span>
         </div>
       )}
@@ -337,19 +322,17 @@ export default function ComputerOS({ sessionId, steamId, playerName, interactive
         display: 'flex', alignItems: 'center', padding: '0 8px',
         borderTop: '1px solid rgba(255,255,255,0.08)', zIndex: 9999,
       }}>
-        {/* Home */}
         <div
           onClick={() => canControl && pushState({ activeApp: 'desktop' })}
           style={{
             width: '40px', height: '40px', display: 'flex', alignItems: 'center', justifyContent: 'center',
-            cursor: 'pointer', borderRadius: '4px', fontSize: '1.3rem',
+            cursor: 'pointer', borderRadius: '4px', fontSize: '0.8rem', fontWeight: 'bold', color: '#00c8ff',
             background: shared.activeApp === 'desktop' ? 'rgba(0,200,255,0.2)' : 'transparent',
           }}
         >
-          🖥️
+          ERA
         </div>
 
-        {/* App buttons */}
         <div style={{ display: 'flex', gap: '2px', marginLeft: '6px', flex: 1 }}>
           {apps.map(app => (
             <div
@@ -362,22 +345,21 @@ export default function ComputerOS({ sessionId, steamId, playerName, interactive
                 color: '#ccc', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '4px',
               }}
             >
-              <span>{app.icon}</span>
+              <span style={{ fontWeight: 'bold', color: '#00c8ff', fontSize: '0.7rem' }}>{app.icon}</span>
               <span>{app.title}</span>
             </div>
           ))}
         </div>
 
-        {/* System tray */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '0 10px' }}>
-          {isController && <span style={{ fontSize: '0.7rem', color: '#00ff88', background: 'rgba(0,255,136,0.1)', padding: '2px 8px', borderRadius: '10px' }}>🎮 Contrôle</span>}
-          <span style={{ fontSize: '0.75rem', color: '#888' }}>👥 {viewers.length}</span>
+          {isController && <span style={{ fontSize: '0.7rem', color: '#00ff88', background: 'rgba(0,255,136,0.1)', padding: '2px 8px', borderRadius: '10px' }}>Controle</span>}
+          <span style={{ fontSize: '0.75rem', color: '#888' }}>{viewers.length} en ligne</span>
           <span style={{ fontSize: '0.85rem', color: '#ccc' }}>{currentTime}</span>
           <span
             onClick={() => { if (window.gmod?.powerOff) window.gmod.powerOff(); }}
-            style={{ cursor: 'pointer', fontSize: '1rem', color: '#f55' }}
-            title="Éteindre"
-          >⏻</span>
+            style={{ cursor: 'pointer', fontSize: '0.8rem', color: '#f55', fontWeight: 'bold' }}
+            title="Eteindre"
+          >OFF</span>
         </div>
       </div>
 
@@ -406,7 +388,13 @@ function DesktopView({ apps, onOpen }: { apps: { id: string; title: string; icon
           onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.1)')}
           onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
         >
-          <div style={{ fontSize: '2.5rem' }}>{app.icon}</div>
+          <div style={{
+            fontSize: '1.2rem', fontWeight: 'bold', color: '#00c8ff',
+            width: '48px', height: '48px', margin: '0 auto',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            background: 'rgba(0,200,255,0.1)', borderRadius: '12px',
+            border: '1px solid rgba(0,200,255,0.2)',
+          }}>{app.icon}</div>
           <div style={{ fontSize: '0.75rem', color: '#ddd', textShadow: '1px 1px 3px #000', marginTop: '6px' }}>
             {app.title}
           </div>
@@ -784,7 +772,7 @@ function GalleryApp({ shared, canControl, onUpdate, onBack }: {
 // UTILISATEURS CONNECTÉS
 // ===============================
 function ViewersApp({ viewers, shared, steamId, onBack, onTakeControl, canControl }: {
-  viewers: Viewer[]; shared: SharedState; steamId: string;
+  viewers: { steamId: string; name: string }[]; shared: SharedState; steamId: string;
   onBack: () => void; onTakeControl: () => void; canControl: boolean;
 }) {
   return (
