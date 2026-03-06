@@ -444,20 +444,30 @@ function AppBar({ title, icon, onBack }: { title: string; icon: string; onBack: 
 }
 
 // ===============================
-// YOUTUBE — Synchronisé avec timestamp
+// YOUTUBE — Via Invidious (compatible vieux Chromium GMod)
 // ===============================
+
+// Instances Invidious publiques — fallback en cas de panne
+const INVIDIOUS_INSTANCES = [
+  'https://inv.nadeko.net',
+  'https://invidious.fdn.fr',
+  'https://vid.puffyan.us',
+  'https://invidious.nerdvpn.de',
+];
+
 function YouTubeApp({ shared, canControl, onUpdate, onBack, addNotification }: {
   shared: SharedState; canControl: boolean;
   onUpdate: (s: Partial<SharedState>) => void; onBack: () => void;
   addNotification: (msg: string) => void;
 }) {
   const [inputUrl, setInputUrl] = useState('');
+  const [instanceIdx, setInstanceIdx] = useState(0);
   const yt = shared.youtube;
 
   const playVideo = (url?: string) => {
     if (!canControl) return;
     const target = url || inputUrl;
-    const match = target.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/);
+    const match = target.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|invidious\.[^/]+\/watch\?v=)([a-zA-Z0-9_-]{11})/);
     if (!match) {
       addNotification('Lien YouTube invalide');
       return;
@@ -474,29 +484,32 @@ function YouTubeApp({ shared, canControl, onUpdate, onBack, addNotification }: {
     setInputUrl('');
   };
 
-  // Calculer le temps actuel de la vidéo pour les nouveaux arrivants
   const getEmbedUrl = () => {
     if (!yt.videoId) return '';
-    // Calculer combien de secondes se sont écoulées depuis le démarrage
     let startSeconds = 0;
     if (yt.startedAt > 0) {
       startSeconds = Math.floor((Date.now() - yt.startedAt) / 1000) + (yt.seekTime || 0);
     }
-    return `https://www.youtube.com/embed/${yt.videoId}?autoplay=1&start=${startSeconds}&rel=0&modestbranding=1`;
+    const instance = INVIDIOUS_INSTANCES[instanceIdx % INVIDIOUS_INSTANCES.length];
+    return `${instance}/embed/${yt.videoId}?autoplay=1&start=${startSeconds}&quality=medium&raw=1&player_style=youtube`;
+  };
+
+  const tryNextInstance = () => {
+    setInstanceIdx(prev => prev + 1);
+    addNotification('Essai d\'un autre serveur video...');
   };
 
   const suggestions = [
-    { title: '🎵 LoFi Hip Hop Radio', url: 'https://www.youtube.com/watch?v=jfKfPfyJRdk' },
-    { title: '🌊 Ambiance Pluie', url: 'https://www.youtube.com/watch?v=mPZkdNFkNps' },
-    { title: '🎮 Gaming Music Mix', url: 'https://www.youtube.com/watch?v=36YnV9STBqc' },
-    { title: '😂 Rickroll', url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' },
+    { title: 'LoFi Hip Hop Radio', url: 'https://www.youtube.com/watch?v=jfKfPfyJRdk' },
+    { title: 'Ambiance Pluie', url: 'https://www.youtube.com/watch?v=mPZkdNFkNps' },
+    { title: 'Gaming Music Mix', url: 'https://www.youtube.com/watch?v=36YnV9STBqc' },
+    { title: 'Rickroll', url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' },
   ];
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#0f0f0f' }}>
-      <AppBar title="YouTube Player" icon="▶️" onBack={onBack} />
+      <AppBar title="YouTube Player" icon="YT" onBack={onBack} />
 
-      {/* Barre de recherche */}
       {canControl && (
         <div style={{
           display: 'flex', padding: '10px 12px', gap: '8px', background: 'rgba(0,0,0,0.4)',
@@ -516,33 +529,44 @@ function YouTubeApp({ shared, canControl, onUpdate, onBack, addNotification }: {
           <button onClick={() => playVideo()} style={{
             background: '#ff0000', border: 'none', color: '#fff', borderRadius: '20px',
             padding: '8px 20px', cursor: 'pointer', fontWeight: 'bold',
-          }}>▶ Lire</button>
+          }}>Lire</button>
           {yt.videoId && (
             <button onClick={() => onUpdate({ youtube: { ...yt, videoId: '', playing: false, startedAt: 0, seekTime: 0 } })} style={{
               background: 'rgba(255,255,255,0.1)', border: 'none', color: '#aaa', borderRadius: '20px',
               padding: '8px 16px', cursor: 'pointer',
-            }}>⏹ Stop</button>
+            }}>Stop</button>
           )}
         </div>
       )}
 
-      {/* Lecteur vidéo */}
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
         {yt.videoId ? (
-          <iframe
-            key={`${yt.videoId}_${yt.startedAt}`}
-            src={getEmbedUrl()}
-            style={{ width: '100%', height: '100%', border: 'none' }}
-            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-            allowFullScreen
-            title="YouTube"
-          />
+          <>
+            <iframe
+              key={`${yt.videoId}_${yt.startedAt}_${instanceIdx}`}
+              src={getEmbedUrl()}
+              style={{ width: '100%', height: '100%', border: 'none' }}
+              allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture"
+              allowFullScreen
+              title="YouTube"
+            />
+            {/* Bouton pour changer d'instance si la vidéo ne charge pas */}
+            <button
+              onClick={tryNextInstance}
+              style={{
+                position: 'absolute', bottom: '8px', right: '8px',
+                background: 'rgba(0,0,0,0.7)', border: '1px solid rgba(255,255,255,0.2)',
+                color: '#aaa', padding: '4px 10px', borderRadius: '4px',
+                cursor: 'pointer', fontSize: '0.7rem', zIndex: 10,
+              }}
+            >Changer serveur</button>
+          </>
         ) : (
           <div style={{ textAlign: 'center', color: '#555', padding: '20px' }}>
-            <div style={{ fontSize: '4rem', marginBottom: '1rem' }}>▶️</div>
-            <p style={{ fontSize: '1.1rem', color: '#888' }}>Aucune vidéo en lecture</p>
+            <div style={{ fontSize: '2rem', marginBottom: '1rem', color: '#ff0000', fontWeight: 'bold' }}>YT</div>
+            <p style={{ fontSize: '1.1rem', color: '#888' }}>Aucune video en lecture</p>
             <p style={{ fontSize: '0.8rem', color: '#555', marginTop: '8px', marginBottom: '24px' }}>
-              {canControl ? 'Collez un lien YouTube pour que tout le monde voie la même vidéo' : 'En attente d\'une vidéo...'}
+              {canControl ? 'Collez un lien YouTube pour que tout le monde voie la meme video' : 'En attente d\'une video...'}
             </p>
             {canControl && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'center' }}>
@@ -561,13 +585,12 @@ function YouTubeApp({ shared, canControl, onUpdate, onBack, addNotification }: {
         )}
       </div>
 
-      {/* Status */}
       <div style={{
         padding: '6px 12px', background: 'rgba(0,0,0,0.5)', fontSize: '0.75rem',
         color: '#555', display: 'flex', justifyContent: 'space-between',
       }}>
-        <span>{yt.playing ? '▶ Lecture synchronisée' : '⏸ En attente'}</span>
-        <span>🔊 Le son est partagé avec tous les joueurs</span>
+        <span>{yt.playing ? 'Lecture synchronisee' : 'En attente'}</span>
+        <span>Serveur: {INVIDIOUS_INSTANCES[instanceIdx % INVIDIOUS_INSTANCES.length].replace('https://', '')}</span>
       </div>
     </div>
   );
