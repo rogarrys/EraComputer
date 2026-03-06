@@ -28,6 +28,9 @@ interface SharedState {
   gallery: {
     imageUrl: string;
   };
+  browser: {
+    url: string;
+  };
   controller: {
     steamId: string;
     name: string;
@@ -56,6 +59,7 @@ const DEFAULT_STATE: SharedState = {
   notepad: '',
   radio: { stationUrl: '', stationName: '', playing: false },
   gallery: { imageUrl: '' },
+  browser: { url: '' },
   controller: { steamId: '', name: '' },
   viewers: [],
 };
@@ -84,6 +88,7 @@ export default function ComputerOS({ sessionId, steamId, playerName, interactive
         youtube: { ...DEFAULT_STATE.youtube, ...(state.youtube || {}) },
         radio: { ...DEFAULT_STATE.radio, ...(state.radio || {}) },
         gallery: { ...DEFAULT_STATE.gallery, ...(state.gallery || {}) },
+        browser: { ...DEFAULT_STATE.browser, ...(state.browser || {}) },
         controller: { ...DEFAULT_STATE.controller, ...(state.controller || {}) },
         viewers: state.viewers || [],
       };
@@ -233,6 +238,7 @@ export default function ComputerOS({ sessionId, steamId, playerName, interactive
   // DESKTOP
   // =====================
   const apps = [
+    { id: 'browser', title: 'Navigateur', icon: 'WWW' },
     { id: 'youtube', title: 'YouTube', icon: 'YT' },
     { id: 'radio', title: 'Radio', icon: 'FM' },
     { id: 'notepad', title: 'Bloc-notes', icon: 'TXT' },
@@ -254,6 +260,14 @@ export default function ComputerOS({ sessionId, steamId, playerName, interactive
       <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: '48px', overflow: 'hidden' }}>
         {shared.activeApp === 'desktop' && (
           <DesktopView apps={apps} onOpen={openApp} />
+        )}
+        {shared.activeApp === 'browser' && (
+          <BrowserApp
+            shared={shared}
+            canControl={canControl}
+            onUpdate={pushState}
+            onBack={() => pushState({ activeApp: 'desktop' })}
+          />
         )}
         {shared.activeApp === 'youtube' && (
           <YouTubeApp
@@ -444,16 +458,155 @@ function AppBar({ title, icon, onBack }: { title: string; icon: string; onBack: 
 }
 
 // ===============================
-// YOUTUBE — Via Invidious (compatible vieux Chromium GMod)
+// NAVIGATEUR WEB — Charge n'importe quel site via proxy Vercel
 // ===============================
+function BrowserApp({ shared, canControl, onUpdate, onBack }: {
+  shared: SharedState; canControl: boolean;
+  onUpdate: (s: Partial<SharedState>) => void; onBack: () => void;
+}) {
+  const [inputUrl, setInputUrl] = useState(shared.browser?.url || '');
+  const [displayUrl, setDisplayUrl] = useState(shared.browser?.url || '');
+  const iframeRef = useRef<HTMLIFrameElement>(null);
 
-// Instances Invidious publiques — fallback en cas de panne
-const INVIDIOUS_INSTANCES = [
-  'https://inv.nadeko.net',
-  'https://invidious.fdn.fr',
-  'https://vid.puffyan.us',
-  'https://invidious.nerdvpn.de',
-];
+  // Sync l'URL depuis le state partagé
+  useEffect(() => {
+    if (shared.browser?.url) {
+      setDisplayUrl(shared.browser.url);
+    }
+  }, [shared.browser?.url]);
+
+  const navigate = (targetUrl?: string) => {
+    if (!canControl) return;
+    let url = (targetUrl || inputUrl).trim();
+    if (!url) return;
+
+    // Ajouter https:// si pas de protocole
+    if (!/^https?:\/\//i.test(url)) {
+      // Si ça ressemble à un domaine (contient un point)
+      if (url.includes('.')) {
+        url = 'https://' + url;
+      } else {
+        // Sinon c'est une recherche Google
+        url = 'https://www.google.com/search?q=' + encodeURIComponent(url);
+      }
+    }
+
+    setInputUrl(url);
+    setDisplayUrl(url);
+    onUpdate({ browser: { url } });
+  };
+
+  const getProxyUrl = (url: string) => {
+    if (!url) return '';
+    return '/api/proxy?url=' + encodeURIComponent(url);
+  };
+
+  const bookmarks = [
+    { title: 'Google', url: 'https://www.google.com' },
+    { title: 'Wikipedia', url: 'https://fr.wikipedia.org' },
+    { title: 'Reddit', url: 'https://old.reddit.com' },
+    { title: 'GitHub', url: 'https://github.com' },
+    { title: 'YouTube', url: 'https://m.youtube.com' },
+    { title: 'Twitter/X', url: 'https://nitter.net' },
+  ];
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#0a0a14' }}>
+      {/* Barre de navigation */}
+      <div style={{
+        display: 'flex', alignItems: 'center', padding: '6px 8px', gap: '6px',
+        background: 'rgba(0,0,0,0.6)', borderBottom: '1px solid rgba(255,255,255,0.08)',
+      }}>
+        <div onClick={onBack} style={{
+          cursor: 'pointer', padding: '4px 8px', borderRadius: '4px',
+          background: 'rgba(255,255,255,0.06)', color: '#aaa', fontSize: '0.8rem',
+        }}>Retour</div>
+
+        <div onClick={() => navigate(shared.browser?.url || '')} style={{
+          cursor: 'pointer', padding: '4px 8px', borderRadius: '4px',
+          background: 'rgba(255,255,255,0.06)', color: '#aaa', fontSize: '0.8rem',
+        }}>Recharger</div>
+
+        <div onClick={() => { setInputUrl(''); setDisplayUrl(''); onUpdate({ browser: { url: '' } }); }} style={{
+          cursor: 'pointer', padding: '4px 8px', borderRadius: '4px',
+          background: 'rgba(255,255,255,0.06)', color: '#aaa', fontSize: '0.8rem',
+        }}>Accueil</div>
+
+        <input
+          type="text"
+          value={inputUrl}
+          onChange={e => setInputUrl(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') navigate(); }}
+          onFocus={e => e.target.select()}
+          placeholder="Entrer une URL ou rechercher..."
+          style={{
+            flex: 1, background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)',
+            borderRadius: '6px', padding: '6px 12px', color: '#fff', fontSize: '0.85rem', outline: 'none',
+          }}
+        />
+
+        <button onClick={() => navigate()} style={{
+          background: '#00c8ff', border: 'none', color: '#000', borderRadius: '6px',
+          padding: '6px 14px', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.8rem',
+        }}>Aller</button>
+      </div>
+
+      {/* Contenu */}
+      <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+        {displayUrl ? (
+          <iframe
+            ref={iframeRef}
+            key={displayUrl}
+            src={getProxyUrl(displayUrl)}
+            style={{ width: '100%', height: '100%', border: 'none', background: '#fff' }}
+            sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+            title="Browser"
+          />
+        ) : (
+          <div style={{ padding: '40px', textAlign: 'center' }}>
+            <div style={{ fontSize: '1.5rem', color: '#00c8ff', fontWeight: 'bold', marginBottom: '8px' }}>WWW</div>
+            <div style={{ fontSize: '1.2rem', color: '#ddd', marginBottom: '24px' }}>Navigateur Era</div>
+            <p style={{ color: '#666', fontSize: '0.85rem', marginBottom: '30px' }}>
+              Entrez une URL ou un terme de recherche dans la barre ci-dessus
+            </p>
+
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', justifyContent: 'center', maxWidth: '500px', margin: '0 auto' }}>
+              {bookmarks.map((b, i) => (
+                <div
+                  key={i}
+                  onClick={() => canControl && navigate(b.url)}
+                  style={{
+                    background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
+                    borderRadius: '10px', padding: '12px 18px', cursor: canControl ? 'pointer' : 'default',
+                    color: '#ccc', fontSize: '0.85rem', minWidth: '100px', textAlign: 'center',
+                    transition: 'background 0.15s',
+                  }}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'rgba(0,200,255,0.1)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.05)')}
+                >
+                  {b.title}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Barre d'etat */}
+      <div style={{
+        padding: '4px 12px', background: 'rgba(0,0,0,0.5)', fontSize: '0.7rem',
+        color: '#444', display: 'flex', justifyContent: 'space-between',
+      }}>
+        <span>{displayUrl ? displayUrl : 'Pret'}</span>
+        <span>Via proxy Vercel</span>
+      </div>
+    </div>
+  );
+}
+
+// ===============================
+// YOUTUBE — Via proxy Vercel (contourne les blocages)
+// ===============================
 
 function YouTubeApp({ shared, canControl, onUpdate, onBack, addNotification }: {
   shared: SharedState; canControl: boolean;
@@ -461,7 +614,6 @@ function YouTubeApp({ shared, canControl, onUpdate, onBack, addNotification }: {
   addNotification: (msg: string) => void;
 }) {
   const [inputUrl, setInputUrl] = useState('');
-  const [instanceIdx, setInstanceIdx] = useState(0);
   const yt = shared.youtube;
 
   const playVideo = (url?: string) => {
@@ -490,13 +642,9 @@ function YouTubeApp({ shared, canControl, onUpdate, onBack, addNotification }: {
     if (yt.startedAt > 0) {
       startSeconds = Math.floor((Date.now() - yt.startedAt) / 1000) + (yt.seekTime || 0);
     }
-    const instance = INVIDIOUS_INSTANCES[instanceIdx % INVIDIOUS_INSTANCES.length];
-    return `${instance}/embed/${yt.videoId}?autoplay=1&start=${startSeconds}&quality=medium&raw=1&player_style=youtube`;
-  };
-
-  const tryNextInstance = () => {
-    setInstanceIdx(prev => prev + 1);
-    addNotification('Essai d\'un autre serveur video...');
+    // Utiliser le proxy Vercel pour charger l'embed Piped (frontend YouTube leger)
+    const pipedUrl = `https://piped.video/embed/${yt.videoId}?autoplay=1&start=${startSeconds}`;
+    return '/api/proxy?url=' + encodeURIComponent(pipedUrl);
   };
 
   const suggestions = [
@@ -539,28 +687,16 @@ function YouTubeApp({ shared, canControl, onUpdate, onBack, addNotification }: {
         </div>
       )}
 
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         {yt.videoId ? (
-          <>
-            <iframe
-              key={`${yt.videoId}_${yt.startedAt}_${instanceIdx}`}
-              src={getEmbedUrl()}
-              style={{ width: '100%', height: '100%', border: 'none' }}
-              allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture"
-              allowFullScreen
-              title="YouTube"
-            />
-            {/* Bouton pour changer d'instance si la vidéo ne charge pas */}
-            <button
-              onClick={tryNextInstance}
-              style={{
-                position: 'absolute', bottom: '8px', right: '8px',
-                background: 'rgba(0,0,0,0.7)', border: '1px solid rgba(255,255,255,0.2)',
-                color: '#aaa', padding: '4px 10px', borderRadius: '4px',
-                cursor: 'pointer', fontSize: '0.7rem', zIndex: 10,
-              }}
-            >Changer serveur</button>
-          </>
+          <iframe
+            key={`${yt.videoId}_${yt.startedAt}`}
+            src={getEmbedUrl()}
+            style={{ width: '100%', height: '100%', border: 'none' }}
+            sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+            allowFullScreen
+            title="YouTube"
+          />
         ) : (
           <div style={{ textAlign: 'center', color: '#555', padding: '20px' }}>
             <div style={{ fontSize: '2rem', marginBottom: '1rem', color: '#ff0000', fontWeight: 'bold' }}>YT</div>
@@ -590,7 +726,7 @@ function YouTubeApp({ shared, canControl, onUpdate, onBack, addNotification }: {
         color: '#555', display: 'flex', justifyContent: 'space-between',
       }}>
         <span>{yt.playing ? 'Lecture synchronisee' : 'En attente'}</span>
-        <span>Serveur: {INVIDIOUS_INSTANCES[instanceIdx % INVIDIOUS_INSTANCES.length].replace('https://', '')}</span>
+        <span>Via proxy</span>
       </div>
     </div>
   );
