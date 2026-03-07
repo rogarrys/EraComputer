@@ -1,4 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requestExternal } from '@/lib/external-request';
+
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
 const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
@@ -188,17 +192,16 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const response = await fetch(url, {
+    const response = await requestExternal(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,image/*;q=0.7,*/*;q=0.5',
         'Accept-Language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7',
       },
-      redirect: 'follow',
     });
 
     const finalUrl = response.url || url;
-    const contentType = response.headers.get('content-type') || 'text/html';
+    const contentType = response.headers['content-type'] || 'text/html';
 
     if (contentType.startsWith('image/')) {
       const title = new URL(finalUrl).pathname.split('/').pop() || 'Image';
@@ -211,7 +214,7 @@ export async function GET(req: NextRequest) {
     }
 
     if (contentType.includes('text/plain')) {
-      const text = escapeHtml(await response.text());
+      const text = escapeHtml(response.body.toString('utf8'));
       return htmlResponse(buildPage({
         appOrigin,
         pageUrl: finalUrl,
@@ -220,7 +223,7 @@ export async function GET(req: NextRequest) {
       }));
     }
 
-    const originalHtml = await response.text();
+    const originalHtml = response.body.toString('utf8');
     const titleMatch = originalHtml.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
     const bodyMatch = originalHtml.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
     const title = titleMatch?.[1]?.replace(/\s+/g, ' ').trim() || new URL(finalUrl).hostname;
