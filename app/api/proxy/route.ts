@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requestExternal } from '@/lib/external-request';
 
 // =============================================
 // Proxy Web complet pour EraComputer
@@ -7,6 +8,9 @@ import { NextRequest, NextResponse } from 'next/server';
 // =============================================
 
 const PROXY_PATH = '/api/proxy?url=';
+
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
 function getProxyBase(appOrigin: string) {
   return `${appOrigin}${PROXY_PATH}`;
@@ -78,13 +82,17 @@ async function handleProxy(req: NextRequest, method: string) {
       } catch { /* pas de body */ }
     }
 
-    const res = await fetch(url, fetchOpts);
-    const ct = res.headers.get('content-type') || '';
+    const res = await requestExternal(url, {
+      method,
+      headers: fetchOpts.headers as Record<string, string>,
+      body: typeof fetchOpts.body === 'string' ? fetchOpts.body : undefined,
+    });
+    const ct = res.headers['content-type'] || '';
     const finalUrl = res.url || url;
 
     // ---- HTML : réécrire + injecter ----
     if (ct.includes('text/html')) {
-      let html = await res.text();
+      let html = res.body.toString('utf8');
       html = rewriteHtml(html, finalUrl, appOrigin);
       return new NextResponse(html, {
         status: 200,
@@ -94,7 +102,7 @@ async function handleProxy(req: NextRequest, method: string) {
 
     // ---- CSS : réécrire url() relatifs en absolus ----
     if (ct.includes('text/css')) {
-      let css = await res.text();
+      let css = res.body.toString('utf8');
       css = css.replace(/url\(\s*["']?(?!data:|blob:|https?:\/\/)(.*?)["']?\s*\)/gi, (_m, v) => {
         try { return `url(${new URL(v.trim(), finalUrl).href})`; } catch { return _m; }
       });
@@ -106,7 +114,7 @@ async function handleProxy(req: NextRequest, method: string) {
 
     // ---- JSON / API : passer tel quel avec CORS ----
     if (ct.includes('application/json') || ct.includes('text/javascript') || ct.includes('application/javascript')) {
-      const text = await res.text();
+      const text = res.body.toString('utf8');
       return new NextResponse(text, {
         status: res.status,
         headers: { 'Content-Type': ct, ...CORS_HEADERS },
@@ -114,8 +122,7 @@ async function handleProxy(req: NextRequest, method: string) {
     }
 
     // ---- Tout le reste (images, fonts…) : passer tel quel ----
-    const body = await res.arrayBuffer();
-    return new NextResponse(body, {
+    return new NextResponse(new Uint8Array(res.body), {
       status: res.status,
       headers: { 'Content-Type': ct, 'Cache-Control': 'public, max-age=3600', ...CORS_HEADERS },
     });
